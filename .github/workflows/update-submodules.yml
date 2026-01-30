@@ -1,120 +1,40 @@
-name: Update Dependent Submodules
-
+name: Find Repos using Submodule
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      submodule_repo:
+        description: "The owner/repo name of the submodule to search for (e.g., my-org/shared-library)"
+        required: true
+        default: "enter/your-repo-here"
+      org_name:
+        description: "The name of the organization to search within"
+        required: true
+        default: "enter-your-organization"
 
 jobs:
-  update-submodules:
+  search-for-usages:
     runs-on: ubuntu-latest
     steps:
-      - name: Discover dependent repositories
-        id: discover
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const fullRepoName = `${owner}/${repo}`;
-
-            // Try multiple search approaches
-            const searchQueries = [
-              `"${fullRepoName}" in:file path:.gitmodules`,
-              `${fullRepoName} filename:.gitmodules`,
-              `"${fullRepoName}" extension:gitmodules`
-            ];
-
-            let allDependents = new Set();
-
-            for (const searchQuery of searchQueries) {
-              try {
-                console.log(`Searching with query: ${searchQuery}`);
-                
-                const searchResults = await github.rest.search.code({
-                  q: searchQuery,
-                  per_page: 100
-                });
-                
-                console.log(`Found ${searchResults.data.total_count} results`);
-                
-                searchResults.data.items.forEach(item => {
-                  console.log(`  - ${item.repository.full_name} (${item.path})`);
-                  allDependents.add(item.repository.full_name);
-                });
-                
-              } catch (error) {
-                console.log(`Error with query "${searchQuery}":`, error.message);
-                if (error.status === 403) {
-                  console.log('Rate limit hit or authentication issue');
-                }
-              }
-            }
-
-            const dependents = Array.from(allDependents);
-            console.log('\nFinal list of dependent repositories:', dependents);
-
-            if (dependents.length === 0) {
-              console.log('\n!!!!!  No dependent repositories found. This could mean:');
-              console.log('  1. No repositories actually use this as a submodule');
-              console.log('  2. The .gitmodules files are not yet indexed by GitHub');
-              console.log('  3. The PAT_TOKEN lacks required permissions');
-              console.log('  4. The repositories are private and not accessible');
-            }
-
-            core.setOutput('repos', JSON.stringify(dependents));
-
-      - name: Update each dependent repository
-        if: steps.discover.outputs.repos != '[]'
+      - name: Use GitHub CLI to search for submodule references
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-          TARGET_BRANCH: staging
+          GH_TOKEN: ${{ secrets.YOUR_PAT_TOKEN }} # PAT with repo scope or org read access
+          SUBMODULE_REPO: ${{ github.event.inputs.submodule_repo }}
+          ORG_NAME: ${{ github.event.inputs.org_name }}
         run: |
-          dependents='${{ steps.discover.outputs.repos }}'
+          echo "Searching for repos in $ORG_NAME that use $SUBMODULE_REPO as a submodule..."
 
-          if [ "$dependents" = "[]" ]; then
-            echo "No dependent repositories to update"
-            exit 0
+          # Use the gh CLI to search for code with the submodule reference in .gitmodules files
+          # The search query is constrained to the specific organization
+          SEARCH_QUERY="\"$SUBMODULE_REPO\" org:$ORG_NAME filename:.gitmodules"
+
+          # Run the search, format output to get the repository HTML URLs, and remove duplicates
+          # Note: GitHub CLI might return less results than the UI search (API limitation)
+          RESULTS=$(gh search code "$SEARCH_QUERY" --json repository | jq -r '.[] | .repository.htmlUrl' | sort | uniq)
+
+          if [ -z "$RESULTS" ]; then
+            echo "No repositories found using $SUBMODULE_REPO as a submodule in $ORG_NAME."
+          else
+            echo "Found repositories:"
+            echo "$RESULTS"
+            # Optional: Save results to an artifact or issue comment
           fi
-
-          echo "$dependents" | jq -r '.[]' | while read repo; do
-            echo "Processing $repo..."
-            
-            # Clone the dependent repo
-            if ! git clone "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" temp-repo; then
-              echo "❌ Failed to clone $repo"
-              continue
-            fi
-            
-            cd temp-repo
-            
-            # Configure git
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            
-            # Check if staging branch exists, create if not
-            if git ls-remote --heads origin "$TARGET_BRANCH" | grep -q "$TARGET_BRANCH"; then
-              echo "Checking out existing $TARGET_BRANCH branch"
-              git checkout "$TARGET_BRANCH"
-            else
-              echo "Creating new $TARGET_BRANCH branch"
-              git checkout -b "$TARGET_BRANCH"
-            fi
-            
-            # Update submodules
-            git submodule update --init --recursive --remote
-            
-            # Check if there are changes
-            if ! git diff --quiet || ! git diff --staged --quiet; then
-              git add .
-              git commit -m "chore: update submodule $GITHUB_REPOSITORY to ${GITHUB_SHA:0:7}"
-              git push origin "$TARGET_BRANCH"
-              echo "✓ Updated $repo on $TARGET_BRANCH branch"
-            else
-              echo "→ No changes needed for $repo"
-            fi
-            
-            cd ..
-            rm -rf temp-repo
-          done
