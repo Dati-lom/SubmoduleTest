@@ -1,40 +1,110 @@
-name: Find Repos using Submodule
+name: Update All Parent Repositories
+
 on:
-  workflow_dispatch:
-    inputs:
-      submodule_repo:
-        description: "The owner/repo name of the submodule to search for (e.g., my-org/shared-library)"
-        required: true
-        default: "enter/your-repo-here"
-      org_name:
-        description: "The name of the organization to search within"
-        required: true
-        default: "enter-your-organization"
+  workflow_dispatch: # Manual trigger only from GitHub UI
 
 jobs:
-  search-for-usages:
+  load-config:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Use GitHub CLI to search for submodule references
-        env:
-          GH_TOKEN: ${{ secrets.YOUR_PAT_TOKEN }} # PAT with repo scope or org read access
-          SUBMODULE_REPO: ${{ github.event.inputs.submodule_repo }}
-          ORG_NAME: ${{ github.event.inputs.org_name }}
+      - name: Checkout submodule repo
+        uses: actions/checkout@v4
+
+      - name: Load parent repos configuration
+        id: set-matrix
         run: |
-          echo "Searching for repos in $ORG_NAME that use $SUBMODULE_REPO as a submodule..."
+          if [ ! -f .github/parent-repos.json ]; then
+            echo "Error: parent-repos.json not found"
+            exit 1
+          fi
 
-          # Use the gh CLI to search for code with the submodule reference in .gitmodules files
-          # The search query is constrained to the specific organization
-          SEARCH_QUERY="\"$SUBMODULE_REPO\" org:$ORG_NAME filename:.gitmodules"
+          # Validate JSON and create matrix
+          config=$(jq -c '.' .github/parent-repos.json)
+          if [ -z "$config" ] || [ "$config" = "null" ] || [ "$config" = "[]" ]; then
+            echo "Error: Invalid or empty configuration"
+            exit 1
+          fi
 
-          # Run the search, format output to get the repository HTML URLs, and remove duplicates
-          # Note: GitHub CLI might return less results than the UI search (API limitation)
-          RESULTS=$(gh search code "$SEARCH_QUERY" --json repository | jq -r '.[] | .repository.htmlUrl' | sort | uniq)
+          matrix_json=$(echo "{\"include\":$config}" | jq -c '.')
+          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+          echo "Debug - matrix output: $matrix_json"
 
-          if [ -z "$RESULTS" ]; then
-            echo "No repositories found using $SUBMODULE_REPO as a submodule in $ORG_NAME."
+  update-parents:
+    needs: load-config
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.load-config.outputs.matrix) }}
+      fail-fast: false # Continue updating other repos even if one fails
+
+    steps:
+      - name: Checkout parent repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.branch }}
+          token: ${{ secrets.PAT_TOKEN }}
+          submodules: true
+
+      - name: Configure Git
+        run: |
+          git config user.name "Submodule Auto-Update Bot"
+          git config user.email "bot@yourdomain.com"
+
+      - name: Update submodule to latest
+        run: |
+          echo "📦 Updating ${{ matrix.repo }}/${{ matrix.submodule_path }}"
+          echo "   Parent branch: ${{ matrix.branch }}"
+          echo "   Submodule branch: ${{ matrix.submodule_branch }}"
+
+          # Navigate to submodule and fetch latest from remote
+          cd ${{ matrix.submodule_path }}
+          git fetch origin
+
+          # Checkout the latest commit from the specified submodule branch
+          SUBMODULE_BRANCH="${{ matrix.submodule_branch }}"
+          if [ -z "$SUBMODULE_BRANCH" ]; then
+            SUBMODULE_BRANCH="main"
+          fi
+
+          git checkout "origin/$SUBMODULE_BRANCH"
+          cd ..
+
+          echo "✅ Submodule updated to latest commit on $SUBMODULE_BRANCH"
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "✅ No changes - already up to date"
           else
-            echo "Found repositories:"
-            echo "$RESULTS"
-            # Optional: Save results to an artifact or issue comment
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "✅ Changes detected"
+          fi
+
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git add ${{ matrix.submodule_path }}
+          git commit -m "🤖 Auto-update: ${{ matrix.submodule_path }}
+
+          Source: ${{ github.repository }}@${{ github.sha }}
+          Triggered by: Manual workflow dispatch"
+
+          git push origin ${{ matrix.branch }}
+          echo "✅ Successfully updated ${{ matrix.repo }}"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Update Status for ${{ matrix.repo }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ matrix.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Submodule Path**: ${{ matrix.submodule_path }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check_changes.outputs.has_changes }}" == "true" ]; then
+            echo "- **Status**: ✅ Updated successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Status**: ℹ️ Already up to date" >> $GITHUB_STEP_SUMMARY
           fi
