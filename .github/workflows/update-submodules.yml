@@ -15,7 +15,7 @@ jobs:
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
-            const searchQuery = `path:.gitmodules ${process.env.GITHUB_REPOSITORY}`;
+            const searchQuery = `"${process.env.GITHUB_REPOSITORY}" in:file path:.gitmodules`;
 
             try {
               const searchResults = await github.rest.search.code({
