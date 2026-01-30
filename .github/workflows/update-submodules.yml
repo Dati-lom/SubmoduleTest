@@ -1,0 +1,79 @@
+name: Update Dependent Submodules
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  update-submodules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Discover dependent repositories
+        id: discover
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}
+          script: |
+            const searchQuery = `path:.gitmodules ${process.env.GITHUB_REPOSITORY}`;
+
+            try {
+              const searchResults = await github.rest.search.code({
+                q: searchQuery,
+                per_page: 100
+              });
+              
+              const dependents = [...new Set(searchResults.data.items.map(item => 
+                item.repository.full_name
+              ))];
+              
+              console.log('Found dependent repositories:', dependents);
+              core.setOutput('repos', JSON.stringify(dependents));
+            } catch (error) {
+              console.log('Error searching:', error.message);
+              core.setOutput('repos', JSON.stringify([]));
+            }
+
+      - name: Update each dependent repository
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          TARGET_BRANCH: staging # Change this to your preferred branch name
+        run: |
+          dependents='${{ steps.discover.outputs.repos }}'
+
+          echo "$dependents" | jq -r '.[]' | while read repo; do
+            echo "Processing $repo..."
+            
+            # Clone the dependent repo
+            git clone "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" temp-repo
+            cd temp-repo
+            
+            # Configure git
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            
+            # Check if staging branch exists, create if not
+            if git ls-remote --heads origin "$TARGET_BRANCH" | grep -q "$TARGET_BRANCH"; then
+              echo "Checking out existing $TARGET_BRANCH branch"
+              git checkout "$TARGET_BRANCH"
+            else
+              echo "Creating new $TARGET_BRANCH branch"
+              git checkout -b "$TARGET_BRANCH"
+            fi
+            
+            # Update submodules
+            git submodule update --init --recursive --remote
+            
+            # Check if there are changes
+            if ! git diff --quiet || ! git diff --staged --quiet; then
+              git add .
+              git commit -m "chore: update submodule $GITHUB_REPOSITORY to ${GITHUB_SHA:0:7}"
+              git push origin "$TARGET_BRANCH"
+              echo "✓ Updated $repo on $TARGET_BRANCH branch"
+            else
+              echo "→ No changes needed for $repo"
+            fi
+            
+            cd ..
+            rm -rf temp-repo
+          done
