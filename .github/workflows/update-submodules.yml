@@ -1,7 +1,7 @@
 name: Update All Parent Repositories
 
 on:
-  workflow_dispatch: # Manual trigger only from GitHub UI
+  workflow_dispatch:
 
 jobs:
   load-config:
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.load-config.outputs.matrix) }}
-      fail-fast: false # Continue updating other repos even if one fails
+      fail-fast: false
 
     steps:
       - name: Checkout parent repository
@@ -54,7 +54,7 @@ jobs:
 
       - name: Update submodule to latest
         run: |
-          echo "📦 Updating ${{ matrix.repo }}/${{ matrix.submodule_path }}"
+          echo "   Updating ${{ matrix.repo }}/${{ matrix.submodule_path }}"
           echo "   Parent branch: ${{ matrix.branch }}"
           echo "   Submodule branch: ${{ matrix.submodule_branch }}"
 
@@ -71,30 +71,30 @@ jobs:
           git checkout "origin/$SUBMODULE_BRANCH"
           cd ..
 
-          echo "✅ Submodule updated to latest commit on $SUBMODULE_BRANCH"
+          echo "Submodule updated to latest commit on $SUBMODULE_BRANCH"
 
       - name: Check for changes
         id: check_changes
         run: |
           if git diff --quiet && git diff --staged --quiet; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "✅ No changes - already up to date"
+            echo "No changes - already up to date"
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "✅ Changes detected"
+            echo "Changes detected"
           fi
 
       - name: Commit and push changes
         if: steps.check_changes.outputs.has_changes == 'true'
         run: |
           git add ${{ matrix.submodule_path }}
-          git commit -m "🤖 Auto-update: ${{ matrix.submodule_path }}
+          git commit -m "Auto-update: ${{ matrix.submodule_path }}
 
           Source: ${{ github.repository }}@${{ github.sha }}
           Triggered by: Manual workflow dispatch"
 
           git push origin ${{ matrix.branch }}
-          echo "✅ Successfully updated ${{ matrix.repo }}"
+          echo " Successfully updated ${{ matrix.repo }}"
 
       - name: Summary
         if: always()
@@ -104,7 +104,7 @@ jobs:
           echo "- **Branch**: ${{ matrix.branch }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Submodule Path**: ${{ matrix.submodule_path }}" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.check_changes.outputs.has_changes }}" == "true" ]; then
-            echo "- **Status**: ✅ Updated successfully" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status**:  Updated successfully" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- **Status**: ℹ️ Already up to date" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status**: Already up to date" >> $GITHUB_STEP_SUMMARY
           fi
