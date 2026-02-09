@@ -1,14 +1,14 @@
 [
   {
-    "repo": "Dati-lom/submodule_I",
+    "repo": "Dati-lom/Submodule_I",
     "branch": "staging",
-    "submodule_path": "submodule_I",
+    "submodule_path": "Submodule_I",
     "submodule_branch": "main"
   },
     {
-    "repo": "Dati-lom/submodule_II",
+    "repo": "Dati-lom/Submodule_II",
     "branch": "staging",
-    "submodule_path": "submodule_II",
+    "submodule_path": "Submodule_II",
     "submodule_branch": "main"
   }
 ]
