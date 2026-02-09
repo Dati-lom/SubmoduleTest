@@ -1,6 +1,7 @@
 name: Update All Parent Repositories
 
 on:
+  push:
   workflow_dispatch:
 
 jobs:
